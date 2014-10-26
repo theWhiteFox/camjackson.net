@@ -1,6 +1,7 @@
 var gulp = require('gulp');
 var mocha = require('gulp-mocha');
 var spawn = require('child_process').spawn;
+var exec = require('child-process-promise').exec;
 var Q = require('q');
 var confirm = require('./lib/helpers').confirm;
 
@@ -8,6 +9,11 @@ gulp.task('seed', seed);
 gulp.task('test', test);
 gulp.task('test:unit', testUnit);
 gulp.task('test:integration', testIntegration);
+
+gulp.task('docker:build', dockerBuild);
+gulp.task('docker:install', ['docker:build'], dockerInstall);
+gulp.task('docker:run', ['docker:build'], dockerRun);
+gulp.task('docker:test', dockerTest);
 
 function test() {
   return testUnit().then(function() {
@@ -74,4 +80,92 @@ function seed() {
   }).then(function() {
     mongoose.disconnect();
   });
+}
+
+//TODO: REVIEW EVERYTHING BELOW THIS
+
+var dockerHost = '192.168.59.103';
+var dockerEnv = 'DOCKER_HOST=tcp://' + dockerHost + ':2375 ';
+
+function dockerBuild() {
+  return exec('boot2docker start').then(function(result) {
+    printExecResult(result);
+    return exec(dockerEnv + 'docker build -t camjackson/writeitdown .');
+  }).then(function(result) {
+    printExecResult(result);
+  });
+}
+
+function dockerInstall() {
+  return exec(dockerEnv + 'docker stop camjackson/writeitdown || :').then(function() {
+    return exec(dockerEnv + 'docker rm camjackson/writeitdown || :');
+  }).then(function() {
+    return dockerMongo();
+  }).then(function() {
+    return exec(dockerEnv + 'docker run -d -p 8080:8080 --link mongo:database --name writeitdown camjackson/writeitdown gulp install')
+  });
+}
+
+function dockerRun() {
+  return exec(dockerEnv + 'docker stop camjackson/writeitdown || :').then(function() {
+    return exec(dockerEnv + 'docker rm camjackson/writeitdown || :');
+  }).then(function() {
+    return dockerMongo();
+  }).then(function() {
+    return exec(dockerEnv + 'docker run -d -p 8080:8080 --link mongo:database --name writeitdown camjackson/writeitdown')
+  });
+}
+
+function dockerTest() {
+  return dockerBuildTest().then(function() {
+    return dockerTestUnit()
+  }).then(function() {
+    return dockerMongo();
+  }).then(function() {
+    return dockerTestIntegration();
+  });
+}
+
+function dockerMongo() {
+  return exec(dockerEnv + 'docker stop mongo || :').then(function() {
+    return exec(dockerEnv + 'docker rm mongo || :');
+  }).then(function() {
+    return exec(dockerEnv + 'docker run -d --name mongo mongo')
+  }).then(function(result) {
+    printExecResult(result);
+  });
+}
+
+function dockerBuildTest() {
+  return exec('boot2docker start').then(function(result) {
+    printExecResult(result);
+    return exec(dockerEnv + 'docker build -t writeitdown-test .');
+  }).then(function(result) {
+    printExecResult(result);
+  });
+}
+
+var mochaBaseCommand = 'node ./node_modules/mocha/bin/mocha --reporter dot --recursive';
+
+function dockerTestUnit() {
+  var mochaCommand = mochaBaseCommand + ' spec/unit';
+  var dockerCommand = dockerEnv + 'docker run --rm writeitdown-test ' + mochaCommand;
+  return exec(dockerCommand).then(function(result) {
+    printExecResult(result);
+  });
+}
+
+function dockerTestIntegration() {
+  var mochaCommand = mochaBaseCommand + ' spec/integration';
+  var dockerCommand = dockerEnv + 'docker run --rm --link mongo:database writeitdown-test ' + mochaCommand;
+  return exec(dockerCommand).then(function(result) {
+    printExecResult(result);
+  });
+}
+
+function printExecResult(result, ignoreErr) {
+  console.log(result.stdout);
+  if (!ignoreErr) {
+    console.log(result.stderr);
+  }
 }
